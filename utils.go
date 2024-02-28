@@ -1,6 +1,8 @@
 package delaywheel
 
-import "time"
+import (
+	"time"
+)
 
 // truncate returns the result of rounding x toward zero to a multiple of m.
 // If m <= 0, Truncate returns x unchanged.
@@ -20,4 +22,17 @@ func timeToMs(t time.Time) int64 {
 // t milliseconds since January 1, 1970 UTC.
 func msToTime(t int64) time.Time {
 	return time.Unix(0, t*int64(time.Millisecond)).UTC()
+}
+
+func refreshTimer(t *time.Timer, now int64, expireTime int64) {
+	// Ensure the timer is fully reset.
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+
+	delta := (expireTime - now) * int64(time.Millisecond)
+	t.Reset(time.Duration(delta))
 }

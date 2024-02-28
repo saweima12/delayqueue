@@ -82,9 +82,37 @@ func (ctx *StopCtx) GetAllTask() []*Task {
 }
 
 func (ctx *StopCtx) WaitForDone() {
+	timer := time.NewTimer(0)
+	for {
+		exp, isEmpty := ctx.getMaxExpiration()
+		if isEmpty {
+			break
+		}
+		// Calculate the watting time.
+		now := timeToMs(time.Now().UTC())
+		if exp-now < 0 {
+			break
+		}
+		refreshTimer(timer, now, exp)
+		// Waitting for expiration.
+		<-timer.C
+	}
+
+	ctx.de.wg.Wait()
 
 }
 
-func (ctx *StopCtx) CloseNow() {
+func (ctx *StopCtx) getMaxExpiration() (ms int64, isEmpty bool) {
+	data := ctx.de.getAllTask()
+	if len(data) < 1 {
+		return 0, true
+	}
 
+	rtn := int64(0)
+	for _, t := range ctx.de.getAllTask() {
+		if t.expiration > rtn {
+			rtn = t.expiration
+		}
+	}
+	return rtn, false
 }

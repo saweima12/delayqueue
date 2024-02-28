@@ -54,6 +54,7 @@ type Task struct {
 	de     *DelayWheel
 	elm    *list.Element
 	bucket *bucket
+	wg     *sync.WaitGroup
 }
 
 // Get the taskID
@@ -69,6 +70,10 @@ func (dt *Task) Expiration() int64 {
 // Execute the task;
 // Notice: The task will self-recycle and clear relevant data after execution.
 func (dt *Task) Execute() {
+	if dt.wg != nil {
+		dt.wg.Done()
+	}
+
 	ctx := dt.de.createContext(dt)
 	dt.executor.Execute(ctx)
 

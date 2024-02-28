@@ -122,7 +122,7 @@ func (dq *delayQueue[T]) refreshTimer(expireTime int64) {
 		}
 	}
 
-	delta := expireTime - dq.nowFunc()
+	delta := (expireTime - dq.nowFunc()) * int64(time.Millisecond)
 	dq.t.Reset(time.Duration(delta))
 }
 

@@ -59,6 +59,7 @@ func create(tickMs int64, wheelSize int, startMs int64) *DelayWheel {
 	dw.curTime.Store(startMs)
 	dw.ctxPool = newCtxPool(dw)
 	dw.taskPool = newTaskPool()
+	dw.isClosing.Store(false)
 	return dw
 }
 
@@ -71,6 +72,7 @@ type DelayWheel struct {
 	curTaskID    atomic.Uint64
 	autoRun      bool
 	shuttingDown uint32
+	isClosing    atomic.Bool
 	wg           sync.WaitGroup
 
 	wheel    *tWheel
@@ -92,8 +94,19 @@ func (de *DelayWheel) Start() {
 }
 
 // Send a stop signal to delaywheel
-func (de *DelayWheel) Stop() {
+func (de *DelayWheel) Stop(stopFunc StopFunc) error {
+	de.isClosing.Store(true)
+
+	stopCtx := &StopCtx{
+		de: de,
+	}
+	err := stopFunc(stopCtx)
+	if err != nil {
+		return err
+	}
+
 	de.stopCh <- struct{}{}
+	return nil
 }
 
 func (de *DelayWheel) PendingChan() <-chan func() {
@@ -101,23 +114,27 @@ func (de *DelayWheel) PendingChan() <-chan func() {
 }
 
 // Submit a delayed execution of a function.
-func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId uint64) {
+func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId uint64, err error) {
 	t := de.createTask(d)
 	t.executor = pureExec(f)
-	de.addTaskCh <- t
-	return t.taskID
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
 // Submit a delayed execution of a executor.
-func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId uint64) {
+func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId uint64, err error) {
 	t := de.createTask(d)
 	t.executor = executor
-	de.addTaskCh <- t
-	return t.taskID
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
 // Schedule a delayed execution of a function with a time interval.
-func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskId uint64) {
+func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskId uint64, err error) {
 	// Create the task and wrpper auto reSchedul
 	t := de.createTask(d)
 	sch := pureScheduler{d: d}
@@ -132,12 +149,14 @@ func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskI
 		f(ctx)
 	})
 
-	de.addTaskCh <- t
-	return t.taskID
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
 // Schedule a delayed execution of a executor with a time interval.
-func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskId uint64) {
+func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskId uint64, err error) {
 	t := de.createTask(d)
 
 	sch := pureScheduler{d: d}
@@ -152,8 +171,10 @@ func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskI
 		executor.Execute(ctx)
 	})
 
-	de.addTaskCh <- t
-	return t.taskID
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
 func (de *DelayWheel) CancelTask(taskID uint64) {
@@ -190,6 +211,14 @@ func (de *DelayWheel) advanceClock(expiration int64) {
 	// update currentTime
 	de.curTime.Store(expiration)
 	de.wheel.advanceClock(expiration)
+}
+
+func (de *DelayWheel) pushTask(t *Task) error {
+	if de.isClosing.Load() {
+		return fmt.Errorf("The delayWheel is shutting down and will not accept new tasks.")
+	}
+	de.addTaskCh <- t
+	return nil
 }
 
 func (de *DelayWheel) handleExipredBucket(b *bucket) {
@@ -254,6 +283,9 @@ func (de *DelayWheel) addOrRun(task *Task) {
 	}
 
 	if !de.add(task) {
+		// Add into waitGroup.
+		task.wg = &de.wg
+		de.wg.Add(1)
 		// If autoRun is enabled, It will directly start a goroutine for automatic execution.
 		if de.autoRun {
 			go task.Execute()

@@ -26,6 +26,25 @@ func TestAfterFuncAndAutoRun(t *testing.T) {
 		fmt.Println("AutoRun: Hello")
 	})
 
+	dw.AfterFunc(time.Second*3, func(ctx *delaywheel.TaskCtx) {
+		fmt.Println("AutoRun: Hello wait 3")
+	})
+
+	fmt.Println("Start to shuting down....")
+	go dw.Stop(func(ctx *delaywheel.StopCtx) error {
+		ctx.WaitForDone()
+		return nil
+	})
+	<-time.After(time.Second)
+	_, err = dw.AfterFunc(time.Second*3, func(ctx *delaywheel.TaskCtx) {
+		fmt.Println("AutoRun: Hello wait 3")
+	})
+
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	fmt.Println("Terminated....")
 	<-time.After(time.Second * 5)
 }
 
