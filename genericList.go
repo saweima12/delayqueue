@@ -2,25 +2,25 @@ package delaywheel
 
 import clist "container/list"
 
-type GenericList[T comparable] struct {
+type genericList[T comparable] struct {
 	list *clist.List
 }
 
-func NewGeneric[T comparable]() *GenericList[T] {
-	return &GenericList[T]{
+func newGeneric[T comparable]() *genericList[T] {
+	return &genericList[T]{
 		list: clist.New(),
 	}
 }
 
-func (gl *GenericList[T]) PushFront(value T) *clist.Element {
+func (gl *genericList[T]) PushFront(value T) *clist.Element {
 	return gl.list.PushFront(value)
 }
 
-func (gl *GenericList[T]) PushBack(value T) *clist.Element {
+func (gl *genericList[T]) PushBack(value T) *clist.Element {
 	return gl.list.PushBack(value)
 }
 
-func (gl *GenericList[T]) PopAll() []T {
+func (gl *genericList[T]) PopAll() []T {
 
 	result := make([]T, 0, gl.list.Len())
 
@@ -39,7 +39,7 @@ func (gl *GenericList[T]) PopAll() []T {
 	return result
 }
 
-func (gl *GenericList[T]) PopFront() (T, bool) {
+func (gl *genericList[T]) PopFront() (T, bool) {
 	var zero T
 	node := gl.remove(gl.list.Front())
 	if node == nil {
@@ -53,7 +53,7 @@ func (gl *GenericList[T]) PopFront() (T, bool) {
 	return result, true
 }
 
-func (gl *GenericList[T]) PopBack() (T, bool) {
+func (gl *genericList[T]) PopBack() (T, bool) {
 	var zero T
 	node := gl.remove(gl.list.Back())
 	if node == nil {
@@ -67,7 +67,7 @@ func (gl *GenericList[T]) PopBack() (T, bool) {
 	return result, true
 }
 
-func (gl *GenericList[T]) RemoveFirst(t T) {
+func (gl *genericList[T]) RemoveFirst(t T) {
 	node := gl.list.Front()
 	for {
 		if node == nil {
@@ -86,7 +86,7 @@ func (gl *GenericList[T]) RemoveFirst(t T) {
 	}
 }
 
-func (gl *GenericList[T]) remove(node *clist.Element) *clist.Element {
+func (gl *genericList[T]) remove(node *clist.Element) *clist.Element {
 	if node == nil {
 		return nil
 	}

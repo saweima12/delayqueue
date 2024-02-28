@@ -49,7 +49,7 @@ func TestAfterExec(t *testing.T) {
 
 	dw.AfterExecute(time.Second, &TestExecutor{})
 
-	task := <-dw.ExecTaskCh()
+	task := <-dw.PendingChan()
 	task()
 }
 
@@ -69,7 +69,7 @@ func TestScheduleFunc(t *testing.T) {
 	limit := time.NewTimer(time.Second * 10)
 	for {
 		select {
-		case item := <-dw.ExecTaskCh():
+		case item := <-dw.PendingChan():
 			item()
 			fmt.Println("point")
 		case <-limit.C:

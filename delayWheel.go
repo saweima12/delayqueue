@@ -2,6 +2,7 @@ package delaywheel
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -9,7 +10,9 @@ import (
 	"github.com/saweima12/delaywheel/internal/shardmap"
 )
 
-func DefaultNow() int64 {
+type StopFunc func(ctx *StopCtx) error
+
+func defaultNow() int64 {
 	return timeToMs(time.Now().UTC())
 }
 
@@ -45,10 +48,10 @@ func create(tickMs int64, wheelSize int, startMs int64) *DelayWheel {
 		autoRun:     false,
 
 		taskMap: shardmap.NewNum[uint64, *Task](),
-		queue:   pqueue.NewDelayQueue[*bucket](DefaultNow, wheelSize),
+		queue:   pqueue.NewDelayQueue[*bucket](defaultNow, wheelSize),
 		wheel:   newWheel(tickMs, wheelSize, startMs),
 
-		execTaskCh:    make(chan func(), 1),
+		pendingTaskCh: make(chan func(), 1),
 		addTaskCh:     make(chan *Task, 1),
 		recycleTaskCh: make(chan *Task, 1),
 		stopCh:        make(chan struct{}, 1),
@@ -60,13 +63,15 @@ func create(tickMs int64, wheelSize int, startMs int64) *DelayWheel {
 }
 
 type DelayWheel struct {
-	wheelSize   int
-	tickMs      int64
-	curInterval int64
-	startMs     int64
-	curTime     atomic.Int64
-	curTaskID   atomic.Uint64
-	autoRun     bool
+	wheelSize    int
+	tickMs       int64
+	curInterval  int64
+	startMs      int64
+	curTime      atomic.Int64
+	curTaskID    atomic.Uint64
+	autoRun      bool
+	shuttingDown uint32
+	wg           sync.WaitGroup
 
 	wheel    *tWheel
 	taskPool *taskPool
@@ -74,7 +79,7 @@ type DelayWheel struct {
 	taskMap  *shardmap.Map[uint64, *Task]
 	queue    pqueue.DelayQueue[*bucket]
 
-	execTaskCh    chan func()
+	pendingTaskCh chan func()
 	cancelTaskCh  chan uint64
 	addTaskCh     chan *Task
 	recycleTaskCh chan *Task
@@ -91,12 +96,12 @@ func (de *DelayWheel) Stop() {
 	de.stopCh <- struct{}{}
 }
 
-func (de *DelayWheel) ExecTaskCh() <-chan func() {
-	return de.execTaskCh
+func (de *DelayWheel) PendingChan() <-chan func() {
+	return de.pendingTaskCh
 }
 
 // Submit a delayed execution of a function.
-func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) uint64 {
+func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId uint64) {
 	t := de.createTask(d)
 	t.executor = pureExec(f)
 	de.addTaskCh <- t
@@ -104,7 +109,7 @@ func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) uint64 {
 }
 
 // Submit a delayed execution of a executor.
-func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) uint64 {
+func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId uint64) {
 	t := de.createTask(d)
 	t.executor = executor
 	de.addTaskCh <- t
@@ -112,7 +117,7 @@ func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) uint64 {
 }
 
 // Schedule a delayed execution of a function with a time interval.
-func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) uint64 {
+func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskId uint64) {
 	// Create the task and wrpper auto reSchedul
 	t := de.createTask(d)
 	sch := pureScheduler{d: d}
@@ -132,7 +137,7 @@ func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) uint64
 }
 
 // Schedule a delayed execution of a executor with a time interval.
-func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) uint64 {
+func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskId uint64) {
 	t := de.createTask(d)
 
 	sch := pureScheduler{d: d}
@@ -216,7 +221,7 @@ func (de *DelayWheel) add(task *Task) bool {
 	// if the expiration is exceeds the curInterval, expand the wheel.
 	if task.expiration > curTime+de.curInterval {
 		// When the wheel need be extended, advanceClock to now.
-		de.advanceClock(DefaultNow())
+		de.advanceClock(defaultNow())
 		for task.expiration > curTime+de.curInterval {
 			de.expandWheel()
 		}
@@ -239,7 +244,6 @@ func (de *DelayWheel) add(task *Task) bool {
 
 	// Insert into taskmap
 	de.taskMap.Set(task.taskID, task)
-
 	return true
 }
 
@@ -255,7 +259,7 @@ func (de *DelayWheel) addOrRun(task *Task) {
 			go task.Execute()
 			return
 		}
-		de.execTaskCh <- task.Execute
+		de.pendingTaskCh <- task.Execute
 	}
 }
 
@@ -286,6 +290,14 @@ func (de *DelayWheel) createContext(t *Task) *TaskCtx {
 	ctx.t = t
 	ctx.taskCh = de.addTaskCh
 	return ctx
+}
+
+func (de *DelayWheel) getAllTask() []*Task {
+	rtn := make([]*Task, 0)
+	for tuple := range de.taskMap.Iter() {
+		rtn = append(rtn, tuple.Value)
+	}
+	return rtn
 }
 
 func (de *DelayWheel) cancelTask(taskID uint64) {

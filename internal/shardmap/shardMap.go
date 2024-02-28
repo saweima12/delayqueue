@@ -13,13 +13,14 @@ type Stringer interface {
 	comparable
 }
 
-type KeyType[K any] interface {
-	string | NumTypes
-}
-
 type KVShardBlock[K comparable, V any] struct {
 	items map[K]V
 	mu    sync.Mutex
+}
+
+type Tuple[K comparable, V any] struct {
+	Key   K
+	Value V
 }
 
 func createMap[K comparable, V any](f ShardingFunc[K], opts ...Option[K, V]) *Map[K, V] {
@@ -101,6 +102,29 @@ func (sm *Map[K, V]) Remove(key K) {
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 	delete(shard.items, key)
+}
+
+func (sm *Map[K, V]) Iter() <-chan Tuple[K, V] {
+	rtn := make(chan Tuple[K, V], 1)
+	wg := sync.WaitGroup{}
+	wg.Add(len(sm.shards))
+	for _, shard := range sm.shards {
+		go func(block *KVShardBlock[K, V]) {
+			defer wg.Done()
+			block.mu.Lock()
+			defer block.mu.Unlock()
+			for k, v := range block.items {
+				rtn <- Tuple[K, V]{Key: k, Value: v}
+			}
+		}(shard)
+	}
+
+	go func() {
+		wg.Wait()
+		close(rtn)
+	}()
+
+	return rtn
 }
 
 // recommend number.

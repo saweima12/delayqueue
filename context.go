@@ -72,3 +72,19 @@ func (ctx *TaskCtx) ReSchedule(d time.Duration) {
 	ctx.taskCh <- ctx.t
 	ctx.isSechuled = true
 }
+
+type StopCtx struct {
+	de *DelayWheel
+}
+
+func (ctx *StopCtx) GetAllTask() []*Task {
+	return ctx.de.getAllTask()
+}
+
+func (ctx *StopCtx) WaitForDone() {
+
+}
+
+func (ctx *StopCtx) CloseNow() {
+
+}

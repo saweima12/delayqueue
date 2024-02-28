@@ -7,14 +7,14 @@ import (
 
 type bucket struct {
 	expiration int64
-	tasks      *GenericList[*Task]
+	tasks      *genericList[*Task]
 	mu         sync.Mutex
 }
 
 func newBucket() *bucket {
 	return &bucket{
 		expiration: -1,
-		tasks:      NewGeneric[*Task](),
+		tasks:      newGeneric[*Task](),
 	}
 }
 
