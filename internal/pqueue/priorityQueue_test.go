@@ -26,6 +26,8 @@ func TestProirityQueue(t *testing.T) {
 	q.Push(&TestItem{Num: -20})
 	q.Push(&TestItem{Num: -50})
 
+	q.Init()
+
 	popNum := q.Pop().Num
 	if popNum != -50 {
 		t.Errorf("The pop number must be -50, val: %d", popNum)

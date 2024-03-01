@@ -38,6 +38,7 @@ func TestDelayQueue(t *testing.T) {
 		fmt.Println(Poll(dq.ExpiredCh()))
 	}
 
+	dq.Stop()
 }
 
 func Poll(ch <-chan *TestDelayerItem) *TestDelayerItem {

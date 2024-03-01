@@ -126,7 +126,3 @@ func (dq *delayQueue[T]) refreshTimer(expireTime int64) (isRefresh bool) {
 	dq.t.Reset(time.Duration(delta))
 	return true
 }
-
-func (dq *delayQueue[T]) isTimeout(expire int64) bool {
-	return dq.nowFunc() > expire
-}

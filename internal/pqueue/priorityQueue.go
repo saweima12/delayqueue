@@ -16,7 +16,7 @@ func NewPriorityQueue[T any](f LessFunc[T], size int, data ...T) *PriorityQueue[
 	}
 
 	return &PriorityQueue[T]{
-		h: NewHeap[T](f, h),
+		h: NewHeap(f, h),
 	}
 }
 
