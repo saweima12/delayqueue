@@ -10,7 +10,7 @@ import (
 	"github.com/saweima12/delaywheel/internal/shardmap"
 )
 
-type StopFunc func(ctx *StopCtx) error
+type StopFunc func(stopCtx *StopCtx) error
 
 func defaultNow() int64 {
 	return timeToMs(time.Now().UTC())
