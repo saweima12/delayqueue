@@ -3,18 +3,20 @@ package delaywheel
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/saweima12/delaywheel/internal/list"
 )
 
 type bucket struct {
 	expiration int64
-	tasks      *genericList[*Task]
+	tasks      *list.GenericList[*Task]
 	mu         sync.Mutex
 }
 
 func newBucket() *bucket {
 	return &bucket{
 		expiration: -1,
-		tasks:      newGeneric[*Task](),
+		tasks:      list.NewGeneric[*Task](),
 	}
 }
 
