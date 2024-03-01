@@ -11,37 +11,34 @@ import (
 )
 
 func TestDelayWheelWithWorker(t *testing.T) {
-	dw, err := delaywheel.New(1*time.Second, 20,
-		delaywheel.WithPendingBufferSize(20),
+	// Create and startup the delaywheel
+	dw, _ := delaywheel.New(1*time.Second, 20,
 		delaywheel.WithLogLevel(delaywheel.LOG_DEBUG),
 	)
-	if err != nil {
-		t.Fatalf("Failed to create DelayWheel, %v", err)
-	}
+	dw.Start()
 
+	// Insert a new task
 	dw.AfterFunc(2*time.Second, func(taskCtx *delaywheel.TaskCtx) {
 		fmt.Println(taskCtx)
 	})
 
-	dw.Start()
-
-	dw.AfterFunc(3*time.Second, func(taskCtx *delaywheel.TaskCtx) {
+	// Insert a scheduled task to execute every 3 seconds.
+	dw.ScheduleFunc(3*time.Second, func(taskCtx *delaywheel.TaskCtx) {
 		fmt.Println(taskCtx)
 	})
 
+	// Launch a separate goroutine for executing tasks, which can be replaced with a goroutine pool.
 	go func() {
 		for task := range dw.PendingChan() {
 			task()
 		}
 	}()
 
-	fmt.Println("Start to shutting down...")
+	// Shutdown the delaywheel
 	dw.Stop(func(ctx *delaywheel.StopCtx) error {
 		ctx.WaitForDone(context.Background())
 		return nil
 	})
-	fmt.Println("Terminated...")
-
 }
 
 func TestBasicFunctionality(t *testing.T) {

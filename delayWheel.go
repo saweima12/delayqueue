@@ -216,7 +216,8 @@ func (de *DelayWheel) advanceClock(expiration int64) {
 
 func (de *DelayWheel) pushTask(t *Task) error {
 	if de.curState.Load() != uint32(STATE_READY) {
-		de.logger.Warn("Task submission failed due to the current status being: %v", de.curState.Load())
+		curState := de.curState.Load()
+		de.logger.Warn("Task submission failed due to the current status being: %v", wheelState(curState))
 		return fmt.Errorf("The delayWheel is not ready and will not accept any tasks.")
 	}
 	de.addTaskCh <- t
