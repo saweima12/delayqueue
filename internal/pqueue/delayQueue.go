@@ -97,14 +97,11 @@ func (dq *delayQueue[T]) handleOffer(item T) {
 }
 
 func (dq *delayQueue[T]) handleTimeout() {
-	now := dq.nowFunc()
-
 	for dq.pq.Len() > 0 {
 		// take the earliest item
 		topExp := dq.pq.Peek().Expiration()
-		if now < topExp {
+		if dq.refreshTimer(topExp) {
 			// if current time earlier than task time, reset timer & return.
-			dq.refreshTimer(topExp)
 			return
 		}
 		// refershTimer.
@@ -113,7 +110,7 @@ func (dq *delayQueue[T]) handleTimeout() {
 	}
 }
 
-func (dq *delayQueue[T]) refreshTimer(expireTime int64) {
+func (dq *delayQueue[T]) refreshTimer(expireTime int64) (isRefresh bool) {
 	// Ensure the timer is fully reset.
 	if !dq.t.Stop() {
 		select {
@@ -121,9 +118,13 @@ func (dq *delayQueue[T]) refreshTimer(expireTime int64) {
 		default:
 		}
 	}
-
 	delta := (expireTime - dq.nowFunc()) * int64(time.Millisecond)
+
+	if delta <= 0 {
+		return false
+	}
 	dq.t.Reset(time.Duration(delta))
+	return true
 }
 
 func (dq *delayQueue[T]) isTimeout(expire int64) bool {

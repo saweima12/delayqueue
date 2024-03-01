@@ -1,6 +1,7 @@
 package delaywheel
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -24,7 +25,7 @@ func msToTime(t int64) time.Time {
 	return time.Unix(0, t*int64(time.Millisecond)).UTC()
 }
 
-func refreshTimer(t *time.Timer, now int64, expireTime int64) {
+func refreshTimer(t *time.Timer, now int64, expireTime int64) (isRefresh bool) {
 	// Ensure the timer is fully reset.
 	if !t.Stop() {
 		select {
@@ -33,6 +34,11 @@ func refreshTimer(t *time.Timer, now int64, expireTime int64) {
 		}
 	}
 
-	delta := (expireTime - now) * int64(time.Millisecond)
-	t.Reset(time.Duration(delta))
+	deltaMs := expireTime - now
+	if deltaMs <= 0 {
+		return false
+	}
+	fmt.Println(deltaMs)
+	t.Reset(time.Duration(deltaMs) * time.Millisecond)
+	return true
 }

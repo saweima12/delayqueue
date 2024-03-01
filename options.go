@@ -13,3 +13,15 @@ func WithAutoRun() Option {
 		dw.autoRun = true
 	}
 }
+
+func WithLogger(logger Logger) Option {
+	return func(dw *DelayWheel) {
+		dw.logger.Logger = logger
+	}
+}
+
+func WithLogLevel(level LogLevel) Option {
+	return func(dw *DelayWheel) {
+		dw.logger.Level = level
+	}
+}

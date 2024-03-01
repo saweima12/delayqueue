@@ -13,10 +13,6 @@ type Executor interface {
 	Execute(task *TaskCtx)
 }
 
-type Scheduler interface {
-	Next(d time.Time) time.Time
-}
-
 type taskPool struct {
 	pool sync.Pool
 }
@@ -39,6 +35,7 @@ func (tp *taskPool) Put(t *Task) {
 	t.taskID = 0
 	t.expiration = 0
 	t.executor = nil
+	t.interval = 0
 	t.isCancelled.Store(false)
 	t.elm = nil
 	t.bucket = nil
@@ -49,6 +46,7 @@ type Task struct {
 	taskID      uint64
 	expiration  int64
 	executor    Executor
+	interval    time.Duration
 	isCancelled atomic.Bool
 
 	de     *DelayWheel
@@ -70,15 +68,12 @@ func (dt *Task) Expiration() int64 {
 // Execute the task;
 // Notice: The task will self-recycle and clear relevant data after execution.
 func (dt *Task) Execute() {
+
+	isSchedule := dt.run()
+
 	if dt.wg != nil {
 		dt.wg.Done()
 	}
-
-	ctx := dt.de.createContext(dt)
-	dt.executor.Execute(ctx)
-
-	isSchedule := ctx.isSechuled
-	dt.de.recycleContext(ctx)
 
 	if !isSchedule {
 		dt.de.recycleTaskCh <- dt
@@ -87,6 +82,19 @@ func (dt *Task) Execute() {
 
 func (dt *Task) Cancel() {
 	dt.isCancelled.Store(true)
+}
+
+func (dt *Task) run() (isSchedule bool) {
+	ctx := dt.de.createContext(dt)
+	if dt.interval > 0 {
+		ctx.ReSchedule(dt.interval)
+	}
+
+	dt.executor.Execute(ctx)
+	result := ctx.isScheduled
+	dt.de.recycleContext(ctx)
+
+	return result
 }
 
 // Create a simple executor function wrapper.
@@ -102,13 +110,4 @@ type pureExecutor struct {
 
 func (we *pureExecutor) Execute(task *TaskCtx) {
 	we.f(task)
-}
-
-// A simple schedule
-type pureScheduler struct {
-	d time.Duration
-}
-
-func (pu *pureScheduler) Next(cur time.Time) time.Time {
-	return cur.Add(pu.d)
 }
