@@ -50,112 +50,133 @@ func create(tickMs int64, wheelSize int, startMs int64) *DelayWheel {
 		taskMap: shardmap.NewNum[uint64, *Task](),
 		queue:   pqueue.NewDelayQueue[*bucket](defaultNow, wheelSize),
 		wheel:   newWheel(tickMs, wheelSize, startMs),
+		logger: &loggerWrapper{
+			Logger: newStandardLogger(),
+			Level:  LOG_WARN,
+		},
 
 		pendingTaskCh: make(chan func(), 1),
 		addTaskCh:     make(chan *Task, 1),
 		recycleTaskCh: make(chan *Task, 1),
+		cancelTaskCh:  make(chan uint64, 1),
 		stopCh:        make(chan struct{}, 1),
 	}
 	dw.curTime.Store(startMs)
-	dw.ctxPool = newCtxPool(dw)
+	dw.curState.Store(uint32(STATE_TERMINATED))
+	dw.ctxPool = newCtxPool()
 	dw.taskPool = newTaskPool()
 	return dw
 }
 
 type DelayWheel struct {
-	wheelSize    int
-	tickMs       int64
-	curInterval  int64
-	startMs      int64
-	curTime      atomic.Int64
-	curTaskID    atomic.Uint64
-	autoRun      bool
-	shuttingDown uint32
-	wg           sync.WaitGroup
+	wheelSize   int
+	tickMs      int64
+	curInterval int64
+	startMs     int64
+	curTime     atomic.Int64
+	curTaskID   atomic.Uint64
+	curState    atomic.Uint32
+	autoRun     bool
+	wg          sync.WaitGroup
 
 	wheel    *tWheel
 	taskPool *taskPool
 	ctxPool  *ctxPool
 	taskMap  *shardmap.Map[uint64, *Task]
+	logger   *loggerWrapper
 	queue    pqueue.DelayQueue[*bucket]
 
 	pendingTaskCh chan func()
-	cancelTaskCh  chan uint64
 	addTaskCh     chan *Task
 	recycleTaskCh chan *Task
+	cancelTaskCh  chan uint64
 	stopCh        chan struct{}
 }
 
 // Start the delaywheel.
 func (de *DelayWheel) Start() {
+	de.logger.Info("The delayWheel starting...")
+	de.curState.Store(uint32(STATE_READY))
 	go de.run()
 }
 
 // Send a stop signal to delaywheel
-func (de *DelayWheel) Stop() {
+func (de *DelayWheel) Stop(stopFunc StopFunc) error {
+	de.logger.Info("The delayWheel is starting teardown...")
+	de.curState.Store(uint32(STATE_SHUTTING_DOWN))
+	if stopFunc == nil {
+		return nil
+	}
+	stopCtx := &StopCtx{
+		de: de,
+	}
+
+	err := stopFunc(stopCtx)
+	if err != nil {
+		return err
+	}
+
 	de.stopCh <- struct{}{}
+	return nil
 }
 
+// Acquire the channel for pending running tasks
 func (de *DelayWheel) PendingChan() <-chan func() {
 	return de.pendingTaskCh
 }
 
 // Submit a delayed execution of a function.
-func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId uint64) {
+func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId uint64, err error) {
 	t := de.createTask(d)
 	t.executor = pureExec(f)
-	de.addTaskCh <- t
-	return t.taskID
+
+	de.logger.Debug("Push the AfterFunc task with %v delay.", d)
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
 // Submit a delayed execution of a executor.
-func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId uint64) {
+func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId uint64, err error) {
 	t := de.createTask(d)
 	t.executor = executor
-	de.addTaskCh <- t
-	return t.taskID
+
+	de.logger.Debug("Push the AfterExecute task with %v delay.", d)
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
 // Schedule a delayed execution of a function with a time interval.
-func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskId uint64) {
+func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskId uint64, err error) {
 	// Create the task and wrpper auto reSchedul
 	t := de.createTask(d)
-	sch := pureScheduler{d: d}
-	t.executor = pureExec(func(ctx *TaskCtx) {
-		// Calculate new expiration.
-		expiration := sch.Next(msToTime(ctx.Expiration()))
-		if !expiration.IsZero() {
-			ctx.t.expiration = timeToMs(expiration)
-			de.addTaskCh <- ctx.t
-			ctx.isSechuled = true
-		}
-		f(ctx)
-	})
+	t.interval = d
+	t.executor = pureExec(f)
 
-	de.addTaskCh <- t
-	return t.taskID
+	de.logger.Debug("Push the ScheduleFunc task with %v interval.", d)
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
 // Schedule a delayed execution of a executor with a time interval.
-func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskId uint64) {
+func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskId uint64, err error) {
 	t := de.createTask(d)
+	t.interval = d
+	t.executor = executor
 
-	sch := pureScheduler{d: d}
-	t.executor = pureExec(func(ctx *TaskCtx) {
-		// Calculate new expiration.
-		expiration := sch.Next(msToTime(ctx.t.expiration))
-		if !expiration.IsZero() {
-			ctx.t.expiration = timeToMs(expiration)
-			de.addTaskCh <- ctx.t
-			ctx.isSechuled = true
-		}
-		executor.Execute(ctx)
-	})
-
-	de.addTaskCh <- t
-	return t.taskID
+	de.logger.Debug("Push the ScheduleExec task with %v interval.", d)
+	if err := de.pushTask(t); err != nil {
+		return 0, err
+	}
+	return t.taskID, nil
 }
 
+// Cancel a task by TaskID
 func (de *DelayWheel) CancelTask(taskID uint64) {
 	de.cancelTaskCh <- taskID
 }
@@ -174,6 +195,7 @@ func (de *DelayWheel) run() {
 		case taskID := <-de.cancelTaskCh:
 			de.cancelTask(taskID)
 		case <-de.stopCh:
+			close(de.pendingTaskCh)
 			de.queue.Stop()
 			return
 		}
@@ -190,6 +212,16 @@ func (de *DelayWheel) advanceClock(expiration int64) {
 	// update currentTime
 	de.curTime.Store(expiration)
 	de.wheel.advanceClock(expiration)
+}
+
+func (de *DelayWheel) pushTask(t *Task) error {
+	if de.curState.Load() != uint32(STATE_READY) {
+		curState := de.curState.Load()
+		de.logger.Warn("Task submission failed due to the current status being: %v", wheelState(curState))
+		return fmt.Errorf("The delayWheel is not ready and will not accept any tasks.")
+	}
+	de.addTaskCh <- t
+	return nil
 }
 
 func (de *DelayWheel) handleExipredBucket(b *bucket) {
@@ -254,6 +286,9 @@ func (de *DelayWheel) addOrRun(task *Task) {
 	}
 
 	if !de.add(task) {
+		// Add into waitGroup.
+		task.wg = &de.wg
+		de.wg.Add(1)
 		// If autoRun is enabled, It will directly start a goroutine for automatic execution.
 		if de.autoRun {
 			go task.Execute()
@@ -292,12 +327,8 @@ func (de *DelayWheel) createContext(t *Task) *TaskCtx {
 	return ctx
 }
 
-func (de *DelayWheel) getAllTask() []*Task {
-	rtn := make([]*Task, 0)
-	for tuple := range de.taskMap.Iter() {
-		rtn = append(rtn, tuple.Value)
-	}
-	return rtn
+func (de *DelayWheel) getAllTask() <-chan shardmap.Tuple[uint64, *Task] {
+	return de.taskMap.Iter()
 }
 
 func (de *DelayWheel) cancelTask(taskID uint64) {

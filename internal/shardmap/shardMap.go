@@ -44,16 +44,16 @@ func createMap[K comparable, V any](f ShardingFunc[K], opts ...Option[K, V]) *Ma
 
 // Create a ShardMap with string as the key.
 func New[V any](opts ...Option[string, V]) *Map[string, V] {
-	return createMap[string, V](strFnv32, opts...)
+	return createMap(strFnv32, opts...)
 }
 
 func NewNum[K NumTypes, V any](opts ...Option[K, V]) *Map[K, V] {
-	return createMap[K, V](numFnv32[K], opts...)
+	return createMap(numFnv32[K], opts...)
 }
 
 // Create a ShardMap where the key can be any struct implementing the String() method.
 func NewStringer[K Stringer, V any](opts ...Option[K, V]) *Map[K, V] {
-	return createMap[K, V](stringerFnv32, opts...)
+	return createMap(stringerFnv32, opts...)
 }
 
 type ShardingFunc[K comparable] func(key K) uint32
@@ -155,7 +155,7 @@ type NumTypes interface {
 }
 
 func numFnv32[K NumTypes](key K) uint32 {
-	return fnv32(numToBytes[K](key))
+	return fnv32(numToBytes(key))
 }
 
 func numToBytes[T NumTypes](value T) []byte {

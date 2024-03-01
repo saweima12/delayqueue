@@ -10,11 +10,7 @@ import (
 // Executor contains an Execute() method,
 // > where TaskCtx is passed in to obtain the relevant parameters of the current task.
 type Executor interface {
-	Execute(task *TaskCtx)
-}
-
-type Scheduler interface {
-	Next(d time.Time) time.Time
+	Execute(taskCtx *TaskCtx)
 }
 
 type taskPool struct {
@@ -39,6 +35,7 @@ func (tp *taskPool) Put(t *Task) {
 	t.taskID = 0
 	t.expiration = 0
 	t.executor = nil
+	t.interval = 0
 	t.isCancelled.Store(false)
 	t.elm = nil
 	t.bucket = nil
@@ -48,12 +45,15 @@ func (tp *taskPool) Put(t *Task) {
 type Task struct {
 	taskID      uint64
 	expiration  int64
-	executor    Executor
+	interval    time.Duration
 	isCancelled atomic.Bool
+	once        sync.Once
 
-	de     *DelayWheel
-	elm    *list.Element
-	bucket *bucket
+	executor Executor
+	elm      *list.Element
+	wg       *sync.WaitGroup
+	bucket   *bucket
+	de       *DelayWheel
 }
 
 // Get the taskID
@@ -69,19 +69,46 @@ func (dt *Task) Expiration() int64 {
 // Execute the task;
 // Notice: The task will self-recycle and clear relevant data after execution.
 func (dt *Task) Execute() {
-	ctx := dt.de.createContext(dt)
-	dt.executor.Execute(ctx)
+	if dt.isCancelled.Load() {
+		return
+	}
 
-	isSchedule := ctx.isSechuled
-	dt.de.recycleContext(ctx)
+	isSchedule := dt.run()
+
+	if dt.wg != nil {
+		dt.wg.Done()
+	}
 
 	if !isSchedule {
 		dt.de.recycleTaskCh <- dt
 	}
 }
 
+// Cancel the task
 func (dt *Task) Cancel() {
-	dt.isCancelled.Store(true)
+	dt.once.Do(func() {
+		if dt.wg != nil {
+			dt.wg.Done()
+		}
+		dt.isCancelled.Store(true)
+	})
+}
+
+// Get the executor.
+func (dt *Task) Executor() Executor {
+	return dt.executor
+}
+
+func (dt *Task) run() (isSchedule bool) {
+	ctx := dt.de.createContext(dt)
+	if dt.interval > 0 {
+		ctx.ReSchedule(dt.interval)
+	}
+
+	dt.executor.Execute(ctx)
+	result := ctx.isScheduled
+	dt.de.recycleContext(ctx)
+	return result
 }
 
 // Create a simple executor function wrapper.
@@ -97,13 +124,4 @@ type pureExecutor struct {
 
 func (we *pureExecutor) Execute(task *TaskCtx) {
 	we.f(task)
-}
-
-// A simple schedule
-type pureScheduler struct {
-	d time.Duration
-}
-
-func (pu *pureScheduler) Next(cur time.Time) time.Time {
-	return cur.Add(pu.d)
 }

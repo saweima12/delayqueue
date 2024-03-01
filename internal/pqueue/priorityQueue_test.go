@@ -17,7 +17,7 @@ func LessItem(i, j *TestItem) bool {
 
 func TestProirityQueue(t *testing.T) {
 	fmt.Println("==Start to test PriorityQueue==")
-	q := pqueue.NewPriorityQueue[*TestItem](LessItem, 64)
+	q := pqueue.NewPriorityQueue(LessItem, 64)
 	q.Push(&TestItem{Num: 10})
 	q.Push(&TestItem{Num: 20})
 	q.Push(&TestItem{Num: 30})

@@ -1,6 +1,7 @@
 package delaywheel
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,7 +11,7 @@ type ctxPool struct {
 	pool sync.Pool
 }
 
-func newCtxPool(dw *DelayWheel) *ctxPool {
+func newCtxPool() *ctxPool {
 	return &ctxPool{
 		pool: sync.Pool{
 			New: func() any {
@@ -27,7 +28,7 @@ func (c *ctxPool) Get(t *Task) *TaskCtx {
 func (c *ctxPool) Put(ctx *TaskCtx) {
 	ctx.t = nil
 	ctx.taskCh = nil
-	ctx.isSechuled = false
+	ctx.isScheduled = false
 	c.pool.Put(ctx)
 }
 
@@ -35,8 +36,8 @@ type TaskCtx struct {
 	t      *Task
 	taskCh chan *Task
 
-	mu         sync.Mutex
-	isSechuled bool
+	mu          sync.Mutex
+	isScheduled bool
 }
 
 func (ctx *TaskCtx) IsCancelled() bool {
@@ -63,14 +64,14 @@ func (ctx *TaskCtx) ReSchedule(d time.Duration) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 
-	if ctx.isSechuled {
+	if ctx.isScheduled {
 		return
 	}
 	newExp := ctx.ExpireTime().Add(d)
 	atomic.SwapInt64(&ctx.t.expiration, timeToMs(newExp))
 
 	ctx.taskCh <- ctx.t
-	ctx.isSechuled = true
+	ctx.isScheduled = true
 }
 
 type StopCtx struct {
@@ -78,13 +79,65 @@ type StopCtx struct {
 }
 
 func (ctx *StopCtx) GetAllTask() []*Task {
-	return ctx.de.getAllTask()
+	rtn := make([]*Task, 0)
+	for tuple := range ctx.de.getAllTask() {
+		rtn = append(rtn, tuple.Value)
+	}
+	return rtn
 }
 
-func (ctx *StopCtx) WaitForDone() {
+func (ctx *StopCtx) WaitForDone(inputCtx context.Context) {
+	timer := time.NewTimer(0)
+	for {
+		exp, isEmpty := ctx.getMaxExpiration()
+		if isEmpty {
+			break
+		}
+
+		// Calculate the watting time.
+		now := timeToMs(time.Now().UTC())
+		if !refreshTimer(timer, now, exp) {
+			break
+		}
+
+		ctx.de.logger.Info("WaitForDone: %d seconds", time.Duration(exp-now)/1000)
+		// Waitting for expiration.
+		select {
+		case <-timer.C:
+			continue
+		case <-inputCtx.Done():
+			return
+		}
+	}
+
+	done := make(chan struct{}, 1)
+	go func() {
+		ctx.de.wg.Wait()
+		done <- struct{}{}
+	}()
+
+	timer.Stop()
+	// Wait for all tasks to complete or for the context to be canceled.
+	select {
+	case <-done:
+	case <-inputCtx.Done():
+	}
 
 }
 
-func (ctx *StopCtx) CloseNow() {
+func (ctx *StopCtx) getMaxExpiration() (ms int64, isEmpty bool) {
+	rtn := int64(-1)
+	isFound := false
 
+	for tuple := range ctx.de.getAllTask() {
+		if tuple.Value.isCancelled.Load() {
+			continue
+		}
+		if tuple.Value.expiration > rtn {
+			rtn = tuple.Value.expiration
+			isFound = true
+		}
+	}
+
+	return rtn, !isFound
 }
