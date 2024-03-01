@@ -1,7 +1,6 @@
 package delaywheel
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -38,7 +37,6 @@ func refreshTimer(t *time.Timer, now int64, expireTime int64) (isRefresh bool) {
 	if deltaMs <= 0 {
 		return false
 	}
-	fmt.Println(deltaMs)
 	t.Reset(time.Duration(deltaMs) * time.Millisecond)
 	return true
 }
