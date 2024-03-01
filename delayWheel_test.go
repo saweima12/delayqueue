@@ -10,6 +10,40 @@ import (
 	"github.com/saweima12/delaywheel"
 )
 
+func TestDelayWheelWithWorker(t *testing.T) {
+	dw, err := delaywheel.New(1*time.Second, 20,
+		delaywheel.WithPendingBufferSize(20),
+		delaywheel.WithLogLevel(delaywheel.LOG_DEBUG),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create DelayWheel, %v", err)
+	}
+
+	dw.AfterFunc(2*time.Second, func(taskCtx *delaywheel.TaskCtx) {
+		fmt.Println(taskCtx)
+	})
+
+	dw.Start()
+
+	dw.AfterFunc(3*time.Second, func(taskCtx *delaywheel.TaskCtx) {
+		fmt.Println(taskCtx)
+	})
+
+	go func() {
+		for task := range dw.PendingChan() {
+			task()
+		}
+	}()
+
+	fmt.Println("Start to shutting down...")
+	dw.Stop(func(ctx *delaywheel.StopCtx) error {
+		ctx.WaitForDone(context.Background())
+		return nil
+	})
+	fmt.Println("Terminated...")
+
+}
+
 func TestBasicFunctionality(t *testing.T) {
 	dw, err := delaywheel.New(1*time.Millisecond, 20,
 		delaywheel.WithAutoRun(),

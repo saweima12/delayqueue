@@ -25,3 +25,9 @@ func WithLogLevel(level LogLevel) Option {
 		dw.logger.Level = level
 	}
 }
+
+func WithPendingBufferSize(size int) Option {
+	return func(dw *DelayWheel) {
+		dw.pendingTaskCh = make(chan func(), size)
+	}
+}

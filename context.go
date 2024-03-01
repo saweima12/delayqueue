@@ -93,11 +93,14 @@ func (ctx *StopCtx) WaitForDone(inputCtx context.Context) {
 		if isEmpty {
 			break
 		}
+
 		// Calculate the watting time.
 		now := timeToMs(time.Now().UTC())
 		if !refreshTimer(timer, now, exp) {
 			break
 		}
+
+		ctx.de.logger.Info("WaitForDone: %d seconds", time.Duration(exp-now)/1000)
 		// Waitting for expiration.
 		select {
 		case <-timer.C:

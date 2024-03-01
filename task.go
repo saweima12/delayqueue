@@ -10,7 +10,7 @@ import (
 // Executor contains an Execute() method,
 // > where TaskCtx is passed in to obtain the relevant parameters of the current task.
 type Executor interface {
-	Execute(task *TaskCtx)
+	Execute(taskCtx *TaskCtx)
 }
 
 type taskPool struct {
@@ -45,14 +45,15 @@ func (tp *taskPool) Put(t *Task) {
 type Task struct {
 	taskID      uint64
 	expiration  int64
-	executor    Executor
 	interval    time.Duration
 	isCancelled atomic.Bool
+	once        sync.Once
 
-	de     *DelayWheel
-	elm    *list.Element
-	bucket *bucket
-	wg     *sync.WaitGroup
+	executor Executor
+	elm      *list.Element
+	wg       *sync.WaitGroup
+	bucket   *bucket
+	de       *DelayWheel
 }
 
 // Get the taskID
@@ -68,6 +69,9 @@ func (dt *Task) Expiration() int64 {
 // Execute the task;
 // Notice: The task will self-recycle and clear relevant data after execution.
 func (dt *Task) Execute() {
+	if dt.isCancelled.Load() {
+		return
+	}
 
 	isSchedule := dt.run()
 
@@ -80,8 +84,19 @@ func (dt *Task) Execute() {
 	}
 }
 
+// Cancel the task
 func (dt *Task) Cancel() {
-	dt.isCancelled.Store(true)
+	dt.once.Do(func() {
+		if dt.wg != nil {
+			dt.wg.Done()
+		}
+		dt.isCancelled.Store(true)
+	})
+}
+
+// Get the executor.
+func (dt *Task) Executor() Executor {
+	return dt.executor
 }
 
 func (dt *Task) run() (isSchedule bool) {
@@ -93,7 +108,6 @@ func (dt *Task) run() (isSchedule bool) {
 	dt.executor.Execute(ctx)
 	result := ctx.isScheduled
 	dt.de.recycleContext(ctx)
-
 	return result
 }
 

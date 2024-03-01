@@ -12,14 +12,6 @@ import (
 
 type StopFunc func(ctx *StopCtx) error
 
-type wheelState uint32
-
-const (
-	STATE_TERMINATED wheelState = iota
-	STATE_READY
-	STATE_SHUTTING_DOWN
-)
-
 func defaultNow() int64 {
 	return timeToMs(time.Now().UTC())
 }
@@ -59,13 +51,14 @@ func create(tickMs int64, wheelSize int, startMs int64) *DelayWheel {
 		queue:   pqueue.NewDelayQueue[*bucket](defaultNow, wheelSize),
 		wheel:   newWheel(tickMs, wheelSize, startMs),
 		logger: &loggerWrapper{
-			Logger: &standardLogger{},
-			Level:  LOG_INFO,
+			Logger: newStandardLogger(),
+			Level:  LOG_WARN,
 		},
 
 		pendingTaskCh: make(chan func(), 1),
 		addTaskCh:     make(chan *Task, 1),
 		recycleTaskCh: make(chan *Task, 1),
+		cancelTaskCh:  make(chan uint64, 1),
 		stopCh:        make(chan struct{}, 1),
 	}
 	dw.curTime.Store(startMs)
@@ -94,20 +87,22 @@ type DelayWheel struct {
 	queue    pqueue.DelayQueue[*bucket]
 
 	pendingTaskCh chan func()
-	cancelTaskCh  chan uint64
 	addTaskCh     chan *Task
 	recycleTaskCh chan *Task
+	cancelTaskCh  chan uint64
 	stopCh        chan struct{}
 }
 
 // Start the delaywheel.
 func (de *DelayWheel) Start() {
+	de.logger.Info("The delayWheel starting...")
 	de.curState.Store(uint32(STATE_READY))
 	go de.run()
 }
 
 // Send a stop signal to delaywheel
 func (de *DelayWheel) Stop(stopFunc StopFunc) error {
+	de.logger.Info("The delayWheel is starting teardown...")
 	de.curState.Store(uint32(STATE_SHUTTING_DOWN))
 	if stopFunc == nil {
 		return nil
@@ -125,6 +120,7 @@ func (de *DelayWheel) Stop(stopFunc StopFunc) error {
 	return nil
 }
 
+// Acquire the channel for pending running tasks
 func (de *DelayWheel) PendingChan() <-chan func() {
 	return de.pendingTaskCh
 }
@@ -133,6 +129,8 @@ func (de *DelayWheel) PendingChan() <-chan func() {
 func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId uint64, err error) {
 	t := de.createTask(d)
 	t.executor = pureExec(f)
+
+	de.logger.Debug("Push the AfterFunc task with %v delay.", d)
 	if err := de.pushTask(t); err != nil {
 		return 0, err
 	}
@@ -143,6 +141,8 @@ func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId 
 func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId uint64, err error) {
 	t := de.createTask(d)
 	t.executor = executor
+
+	de.logger.Debug("Push the AfterExecute task with %v delay.", d)
 	if err := de.pushTask(t); err != nil {
 		return 0, err
 	}
@@ -156,6 +156,7 @@ func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskI
 	t.interval = d
 	t.executor = pureExec(f)
 
+	de.logger.Debug("Push the ScheduleFunc task with %v interval.", d)
 	if err := de.pushTask(t); err != nil {
 		return 0, err
 	}
@@ -168,12 +169,14 @@ func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskI
 	t.interval = d
 	t.executor = executor
 
+	de.logger.Debug("Push the ScheduleExec task with %v interval.", d)
 	if err := de.pushTask(t); err != nil {
 		return 0, err
 	}
 	return t.taskID, nil
 }
 
+// Cancel a task by TaskID
 func (de *DelayWheel) CancelTask(taskID uint64) {
 	de.cancelTaskCh <- taskID
 }
@@ -192,6 +195,7 @@ func (de *DelayWheel) run() {
 		case taskID := <-de.cancelTaskCh:
 			de.cancelTask(taskID)
 		case <-de.stopCh:
+			close(de.pendingTaskCh)
 			de.queue.Stop()
 			return
 		}
@@ -212,6 +216,7 @@ func (de *DelayWheel) advanceClock(expiration int64) {
 
 func (de *DelayWheel) pushTask(t *Task) error {
 	if de.curState.Load() != uint32(STATE_READY) {
+		de.logger.Warn("Task submission failed due to the current status being: %v", de.curState.Load())
 		return fmt.Errorf("The delayWheel is not ready and will not accept any tasks.")
 	}
 	de.addTaskCh <- t
