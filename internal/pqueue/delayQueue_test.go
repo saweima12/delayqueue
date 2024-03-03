@@ -11,6 +11,7 @@ import (
 
 type TestDelayerItem struct {
 	expiration int64
+	Name       string
 }
 
 func (te *TestDelayerItem) SetExpiration(d int64) bool {
@@ -29,13 +30,30 @@ func TestDelayQueue(t *testing.T) {
 	}, 64)
 	dq.Start()
 
-	nb := TestDelayerItem{expiration: timeToMs(time.Now().Add(5 * time.Second))}
-	nb2 := TestDelayerItem{expiration: timeToMs(time.Now().Add(6 * time.Second))}
+	nb := TestDelayerItem{
+		expiration: timeToMs(time.Now().Add(1 * time.Second)),
+		Name:       "John",
+	}
+	nb2 := TestDelayerItem{
+		expiration: timeToMs(time.Now().Add(2 * time.Second)),
+		Name:       "Lee",
+	}
 	dq.Offer(&nb)
 	dq.Offer(&nb2)
 
+	rtn := []string{}
+
 	for dq.Len() > 0 {
-		fmt.Println(Poll(dq.ExpiredCh()))
+		item := Poll(dq.ExpiredCh())
+		rtn = append(rtn, item.Name)
+	}
+
+	answer := []string{"John", "Lee"}
+	ok := compareArr(rtn, answer)
+	if !ok {
+		t.Errorf("The result must be %v, got %v", answer, rtn)
+		t.Fail()
+
 	}
 
 	dq.Stop()
@@ -46,6 +64,20 @@ func Poll(ch <-chan *TestDelayerItem) *TestDelayerItem {
 	case item := <-ch:
 		return item
 	}
+}
+
+func compareArr[T comparable](arr1, arr2 []T) bool {
+	if len(arr1) != len(arr2) {
+		return false
+	}
+
+	for i := range arr1 {
+		if arr1[i] != arr2[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // timeToMs returns an integer number, which represents t in milliseconds.

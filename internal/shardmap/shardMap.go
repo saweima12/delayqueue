@@ -28,7 +28,6 @@ func createMap[K comparable, V any](f ShardingFunc[K], opts ...Option[K, V]) *Ma
 		shardNum:     SHARD_DEFAULT,
 		shardingFunc: f,
 	}
-
 	for _, opt := range opts {
 		opt(resp)
 	}
@@ -38,7 +37,6 @@ func createMap[K comparable, V any](f ShardingFunc[K], opts ...Option[K, V]) *Ma
 	for i := range resp.shards {
 		resp.shards[i] = &KVShardBlock[K, V]{items: make(map[K]V)}
 	}
-
 	return resp
 }
 
@@ -47,6 +45,7 @@ func New[V any](opts ...Option[string, V]) *Map[string, V] {
 	return createMap(strFnv32, opts...)
 }
 
+// Create a Shardmap with a number as the key.
 func NewNum[K NumTypes, V any](opts ...Option[K, V]) *Map[K, V] {
 	return createMap(numFnv32[K], opts...)
 }
@@ -65,6 +64,7 @@ type Map[K comparable, V any] struct {
 	length int
 }
 
+// Length calculates and returns the total number of key-value pairs in the map.
 func (sm *Map[K, V]) Length() int {
 	total := 0
 	for i := range sm.shards {
@@ -95,6 +95,7 @@ func (sm *Map[K, V]) Set(key K, value V) {
 	sm.length++
 }
 
+// Remove a value by key.
 func (sm *Map[K, V]) Remove(key K) {
 	index := sm.shardingFunc(key) % sm.shardNum
 	shard := sm.shards[index]
@@ -104,21 +105,31 @@ func (sm *Map[K, V]) Remove(key K) {
 	delete(shard.items, key)
 }
 
+// Iter returns a channel to iterate over Map key-value pairs.
 func (sm *Map[K, V]) Iter() <-chan Tuple[K, V] {
+	// Create channel for returning key-value pairs.
 	rtn := make(chan Tuple[K, V], 1)
+
+	// WaitGroup to synchronize goroutines.
 	wg := sync.WaitGroup{}
+	// One for each shard.
 	wg.Add(len(sm.shards))
+
 	for _, shard := range sm.shards {
 		go func(block *KVShardBlock[K, V]) {
+			// Signal done after processing.
 			defer wg.Done()
 			block.mu.Lock()
-			defer block.mu.Unlock()
+			defer block.mu.Unlock() // Ensure shard is locked during iteration.
+
+			// Send each key-value pair on the channel.
 			for k, v := range block.items {
 				rtn <- Tuple[K, V]{Key: k, Value: v}
 			}
 		}(shard)
 	}
 
+	// Close channel once all goroutines are done.
 	go func() {
 		wg.Wait()
 		close(rtn)

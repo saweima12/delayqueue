@@ -118,11 +118,10 @@ func (dq *delayQueue[T]) refreshTimer(expireTime int64) (isRefresh bool) {
 		default:
 		}
 	}
-	delta := (expireTime - dq.nowFunc()) * int64(time.Millisecond)
-
+	delta := expireTime - dq.nowFunc()
 	if delta <= 0 {
 		return false
 	}
-	dq.t.Reset(time.Duration(delta))
+	dq.t.Reset(time.Duration(delta) * time.Millisecond)
 	return true
 }
