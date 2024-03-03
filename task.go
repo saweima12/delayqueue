@@ -34,20 +34,31 @@ func (tp *taskPool) Get() *Task {
 func (tp *taskPool) Put(t *Task) {
 	t.taskID = 0
 	t.expiration = 0
-	t.executor = nil
 	t.interval = 0
-	t.isCancelled.Store(false)
+	t.state.Store(0)
+
+	t.executor = nil
 	t.elm = nil
+	t.wg = nil
 	t.bucket = nil
+	t.de = nil
 	tp.pool.Put(t)
 }
 
+type taskState uint32
+
+const (
+	taskReady taskState = iota
+	taskExecuted
+	taskCanceled
+)
+
 type Task struct {
-	taskID      uint64
-	expiration  int64
-	interval    time.Duration
-	isCancelled atomic.Bool
-	once        sync.Once
+	taskID     uint64
+	expiration int64
+	interval   time.Duration
+	state      atomic.Uint32
+	mu         sync.Mutex
 
 	executor Executor
 	elm      *list.Element
@@ -69,29 +80,35 @@ func (dt *Task) Expiration() int64 {
 // Execute the task;
 // Notice: The task will self-recycle and clear relevant data after execution.
 func (dt *Task) Execute() {
-	if dt.isCancelled.Load() {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	if dt.state.Load() != uint32(taskReady) {
+		dt.waitDone()
 		return
 	}
 
-	isSchedule := dt.run()
+	dt.run()
 
-	if dt.wg != nil {
-		dt.wg.Done()
-	}
+	dt.state.Store(uint32(taskExecuted))
+	dt.waitDone()
 
-	if !isSchedule {
-		dt.de.recycleTaskCh <- dt
-	}
+	dt.de.recycleTask(dt)
 }
 
 // Cancel the task
 func (dt *Task) Cancel() {
-	dt.once.Do(func() {
-		if dt.wg != nil {
-			dt.wg.Done()
-		}
-		dt.isCancelled.Store(true)
-	})
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+
+	if dt.IsCanceled() {
+		return
+	}
+	dt.state.Store(uint32(taskCanceled))
+}
+
+func (dt *Task) IsCanceled() bool {
+	return dt.state.Load() == uint32(taskCanceled)
 }
 
 // Get the executor.
@@ -109,6 +126,25 @@ func (dt *Task) run() (isSchedule bool) {
 	result := ctx.isScheduled
 	dt.de.recycleContext(ctx)
 	return result
+}
+
+func (dt *Task) setWaitGroup(wg *sync.WaitGroup) bool {
+	if dt.IsCanceled() {
+		return false
+	}
+	dt.mu.Lock()
+	dt.wg = wg
+	dt.mu.Unlock()
+	return true
+}
+
+func (dt *Task) waitDone() {
+	if dt.wg == nil {
+		return
+	}
+
+	dt.wg.Done()
+	dt.wg = nil
 }
 
 // Create a simple executor function wrapper.

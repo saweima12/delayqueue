@@ -3,7 +3,6 @@ package delaywheel
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -27,25 +26,25 @@ func (c *ctxPool) Get(t *Task) *TaskCtx {
 
 func (c *ctxPool) Put(ctx *TaskCtx) {
 	ctx.t = nil
-	ctx.taskCh = nil
+	ctx.pushFunc = nil
 	ctx.isScheduled = false
 	c.pool.Put(ctx)
 }
 
 type TaskCtx struct {
-	t      *Task
-	taskCh chan *Task
+	t        *Task
+	pushFunc func(*Task) error
 
-	mu          sync.Mutex
 	isScheduled bool
+	mu          sync.Mutex
 }
 
 func (ctx *TaskCtx) IsCancelled() bool {
-	return ctx.t.isCancelled.Load()
+	return ctx.t.IsCanceled()
 }
 
 func (ctx *TaskCtx) Cancel() {
-	ctx.t.isCancelled.Store(true)
+	ctx.t.Cancel()
 }
 
 func (ctx *TaskCtx) TaskID() uint64 {
@@ -67,11 +66,14 @@ func (ctx *TaskCtx) ReSchedule(d time.Duration) {
 	if ctx.isScheduled {
 		return
 	}
-	newExp := ctx.ExpireTime().Add(d)
-	atomic.SwapInt64(&ctx.t.expiration, timeToMs(newExp))
 
-	ctx.taskCh <- ctx.t
-	ctx.isScheduled = true
+	newTask := ctx.t.de.createTask(d)
+	newTask.executor = ctx.t.executor
+	newTask.interval = ctx.t.interval
+	// Attempt to push the new task into delaywheel
+	if err := ctx.pushFunc(newTask); err == nil {
+		ctx.isScheduled = true
+	}
 }
 
 type StopCtx struct {
@@ -88,19 +90,31 @@ func (ctx *StopCtx) GetAllTask() []*Task {
 
 func (ctx *StopCtx) WaitForDone(inputCtx context.Context) {
 	timer := time.NewTimer(0)
+	prevExp := 0
+
 	for {
 		exp, isEmpty := ctx.getMaxExpiration()
 		if isEmpty {
 			break
 		}
-
 		// Calculate the watting time.
-		now := timeToMs(time.Now().UTC())
-		if !refreshTimer(timer, now, exp) {
-			break
+		now := time.Now().UTC()
+		nowMs := timeToMs(now)
+
+		// concurrent scenarios: after the timing wheel retrieves a task but before it is added to the waitGroup,
+		// if it exits directly, there's a high chance the last task will not be executed.
+		if !refreshTimer(timer, nowMs, exp) {
+			if exp == int64(prevExp) {
+				break
+			}
+			// Current solution: Add a delay and wait until the next cycle check.
+			nextExp := now.Add(200 * time.Millisecond)
+			nextExpMs := timeToMs(nextExp)
+			refreshTimer(timer, nowMs, nextExpMs)
+			prevExp = int(nextExpMs)
 		}
 
-		ctx.de.logger.Info("WaitForDone: %d seconds", time.Duration(exp-now)/1000)
+		ctx.de.logger.Info("WaitForDone: %d Ms, exp: %v", time.Duration(exp-nowMs), exp)
 		// Waitting for expiration.
 		select {
 		case <-timer.C:
@@ -126,11 +140,13 @@ func (ctx *StopCtx) WaitForDone(inputCtx context.Context) {
 }
 
 func (ctx *StopCtx) getMaxExpiration() (ms int64, isEmpty bool) {
-	rtn := int64(-1)
+	rtn := int64(0)
 	isFound := false
+	count := 0
 
 	for tuple := range ctx.de.getAllTask() {
-		if tuple.Value.isCancelled.Load() {
+		count++
+		if tuple.Value.IsCanceled() {
 			continue
 		}
 		if tuple.Value.expiration > rtn {
@@ -138,6 +154,5 @@ func (ctx *StopCtx) getMaxExpiration() (ms int64, isEmpty bool) {
 			isFound = true
 		}
 	}
-
 	return rtn, !isFound
 }
