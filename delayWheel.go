@@ -126,7 +126,7 @@ func (de *DelayWheel) PendingChan() <-chan func() {
 
 // Submit a delayed execution of a function.
 func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId uint64, err error) {
-	t := de.createTask(d)
+	t := de.createNewTask(d)
 	t.executor = pureExec(f)
 
 	de.logger.Debug("Push the AfterFunc task with %v delay.", d)
@@ -138,7 +138,7 @@ func (de *DelayWheel) AfterFunc(d time.Duration, f func(task *TaskCtx)) (taskId 
 
 // Submit a delayed execution of a executor.
 func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId uint64, err error) {
-	t := de.createTask(d)
+	t := de.createNewTask(d)
 	t.executor = executor
 
 	de.logger.Debug("Push the AfterExecute task with %v delay.", d)
@@ -151,7 +151,7 @@ func (de *DelayWheel) AfterExecute(d time.Duration, executor Executor) (taskId u
 // Schedule a delayed execution of a function with a time interval.
 func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskId uint64, err error) {
 	// Create the task and wrpper auto reSchedul
-	t := de.createTask(d)
+	t := de.createNewTask(d)
 	t.interval = d
 	t.executor = pureExec(f)
 
@@ -164,7 +164,7 @@ func (de *DelayWheel) ScheduleFunc(d time.Duration, f func(ctx *TaskCtx)) (taskI
 
 // Schedule a delayed execution of a executor with a time interval.
 func (de *DelayWheel) ScheduleExecute(d time.Duration, executor Executor) (taskId uint64, err error) {
-	t := de.createTask(d)
+	t := de.createNewTask(d)
 	t.interval = d
 	t.executor = executor
 
@@ -310,9 +310,14 @@ func (de *DelayWheel) expandWheel() {
 	atomic.StoreInt64(&de.curInterval, next.interval)
 }
 
-func (de *DelayWheel) createTask(d time.Duration) *Task {
-	t := de.taskPool.Get()
+func (de *DelayWheel) createNewTask(d time.Duration) *Task {
+	t := de.getTaskObj(d)
 	t.taskID = de.curTaskID.Add(1)
+	return t
+}
+
+func (de *DelayWheel) getTaskObj(d time.Duration) *Task {
+	t := de.taskPool.Get()
 	t.expiration = timeToMs(time.Now().UTC().Add(d))
 	t.de = de
 	return t

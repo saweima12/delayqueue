@@ -67,7 +67,9 @@ func (ctx *TaskCtx) ReSchedule(d time.Duration) {
 		return
 	}
 
-	newTask := ctx.t.de.createTask(d)
+	newTask := ctx.t.de.getTaskObj(d)
+	newTask.taskID = ctx.t.taskID
+	newTask.state.Store(ctx.t.state.Load())
 	newTask.executor = ctx.t.executor
 	newTask.interval = ctx.t.interval
 	// Attempt to push the new task into delaywheel
