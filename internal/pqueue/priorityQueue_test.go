@@ -31,14 +31,26 @@ func TestProirityQueue(t *testing.T) {
 	popNum := q.Pop().Num
 	if popNum != -50 {
 		t.Errorf("The pop number must be -50, val: %d", popNum)
+		t.Fail()
 	}
 
 	if q.Peek().Num != -20 {
 		t.Errorf("The peek number must be -20, val: %d", q.Peek().Num)
+		t.Fail()
 	}
 
+	answer := []int{-20, -10, 10, 20, 30, 40}
+	rtn := []int{}
 	l := q.Len()
 	for i := 0; i < l; i++ {
-		fmt.Println(q.Pop(), q.Len())
+		item := q.Pop()
+		rtn = append(rtn, item.Num)
 	}
+
+	ok := compareArr(rtn, answer)
+	if !ok {
+		t.Errorf("The result should be %v, got %v", answer, rtn)
+		t.Fail()
+	}
+
 }
